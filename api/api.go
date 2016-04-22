@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -19,6 +18,7 @@ const (
 	commandFlush    = "flush"
 	commandFindId   = "findid"
 	commandDeleteId = "deleteid"
+	commandUpdateId = "updateid"
 
 	responseHi   = "hello frand"
 	unrecognized = "Unrecognized command."
@@ -54,6 +54,8 @@ func HandleCommand(command *Command) ([]byte, error) {
 		return findId(command)
 	case commandDeleteId:
 		return deleteId(command)
+	case commandUpdateId:
+		return updateId(command)
 	default:
 		return nil, errors.New(unrecognized)
 	}
@@ -76,7 +78,6 @@ func insert(command *Command) ([]byte, error) {
 		return nil, errors.New("Document must contain an integer _id field")
 	}
 	if idFloat, ok = id.(float64); !ok {
-		log.Println("second one")
 		return nil, errors.New("Document must contain an integer _id field")
 	}
 	unmarshaled["_id"] = int(idFloat)
@@ -146,5 +147,67 @@ func deleteId(command *Command) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return []byte("OK"), nil
+}
+
+// Update is implemented as a delete followed by an insert
+// Does not currently upsert; if doc does not already exist
+// then the entire update will fail
+func updateId(command *Command) ([]byte, error) {
+	if command.Body == nil {
+		return nil, errors.New("updateid takes an integer ID and a new JSON doc as its command body")
+	}
+
+	pieces := strings.Split(*command.Body, " ")
+	if len(pieces) < 2 {
+		return nil, errors.New("updateid takes an integer ID and a new JSON doc as its command body")
+	}
+
+	idInt, err := strconv.Atoi(pieces[0])
+	if err != nil {
+		return nil, err
+	}
+
+	unmarshaled := make(map[string]interface{})
+	err = json.Unmarshal([]byte(strings.Join(pieces[1:], " ")), &unmarshaled)
+	if err != nil {
+		return nil, err
+	}
+
+	var id interface{}
+	var idFloat float64
+	var ok bool
+	if id, ok = unmarshaled["_id"]; !ok {
+		return nil, errors.New("Document must contain an integer _id field")
+	}
+	if idFloat, ok = id.(float64); !ok {
+		return nil, errors.New("Document must contain an integer _id field")
+	}
+	if int(idFloat) != idInt {
+		return nil, errors.New("New document must have same _id as document being updated")
+	}
+
+	data, err := json.Marshal(unmarshaled)
+	if err != nil {
+		return nil, err
+	}
+
+	locks.GlobalWriteLock.Lock()
+	defer locks.GlobalWriteLock.Unlock()
+
+	result, err := memory.CollectionScanCurrentDataFileForId(idInt)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, errors.New(fmt.Sprintf("Id %d not found", idInt))
+	}
+
+	err = memory.DeleteFromCurrentDataFileAtOffset(result.Offset)
+	if err != nil {
+		return nil, err
+	}
+
+	memory.WriteDocumentToCurrentFile(data)
 	return []byte("OK"), nil
 }
