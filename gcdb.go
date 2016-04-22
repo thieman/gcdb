@@ -30,7 +30,6 @@ func initDataFiles() {
 
 	mdf := memory.NewMappedDataFile(&mappedFile)
 	memory.SetCurrentDataFile(mdf)
-	log.Println(mdf)
 }
 
 func main() {
