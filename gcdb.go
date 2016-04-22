@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"time"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/gamechanger/gcdb/api"
@@ -73,13 +74,17 @@ func handleRequest(conn net.Conn) {
 			panic(err)
 		}
 		command := api.NewCommandFromInput(buf)
+		start := time.Now()
 		response, err := api.HandleCommand(command)
+		end := time.Now()
 		if err != nil {
 			conn.Write([]byte(err.Error()))
 		} else {
 			conn.Write(response)
 		}
 		conn.Write([]byte{10})
+		conn.Write([]byte(fmt.Sprintf("Elapsed: %fms", float64(end.Sub(start))/float64(time.Millisecond))))
+		conn.Write([]byte{10, 10})
 	}
 	conn.Close()
 }

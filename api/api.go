@@ -16,6 +16,7 @@ const (
 	commandHi       = "hi"
 	commandInsert   = "insert"
 	commandFindId   = "findid"
+	commandFind     = "find"
 	commandDeleteId = "deleteid"
 	commandUpdateId = "updateid"
 	commandIndex    = "index"
@@ -36,7 +37,7 @@ type Command struct {
 
 func init() {
 	responseHelp = "Command List\n"
-	for _, s := range []string{commandHi, commandInsert, commandFindId, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
+	for _, s := range []string{commandHi, commandInsert, commandFindId, commandFind, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
 		responseHelp += s
 		responseHelp += "\n"
 	}
@@ -67,6 +68,8 @@ func HandleCommand(command *Command) ([]byte, error) {
 		return flush(command)
 	case commandFindId:
 		return findId(command)
+	case commandFind:
+		return find(command)
 	case commandDeleteId:
 		return deleteId(command)
 	case commandUpdateId:
@@ -99,6 +102,10 @@ func insert(command *Command) ([]byte, error) {
 	}
 	idInt := int(idFloat)
 	unmarshaled["_id"] = idInt
+
+	if memory.IdExistsInIndex(idInt) {
+		return nil, errors.New(fmt.Sprintf("Id %d violates unique constraint, another document already has this Id", idInt))
+	}
 
 	data, err := json.Marshal(unmarshaled)
 	if err != nil {
@@ -146,6 +153,10 @@ func findId(command *Command) ([]byte, error) {
 	return *result.Document, nil
 }
 
+func find(command *Command) ([]byte, error) {
+	return nil, nil
+}
+
 func deleteId(command *Command) ([]byte, error) {
 	if command.Body == nil {
 		return nil, errors.New("deleteid takes an integer ID as its command body")
@@ -160,7 +171,13 @@ func deleteId(command *Command) ([]byte, error) {
 	locks.GlobalWriteLock.Lock()
 	defer locks.GlobalWriteLock.Unlock()
 
-	result, err := memory.CollectionScanCurrentDataFileForId(idInt)
+	var result *memory.Document
+	if useIndicesForQuery == false {
+		result, err = memory.CollectionScanCurrentDataFileForId(idInt)
+	} else {
+		result, err = memory.IndexScanCurrentDataFileForId(idInt)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +237,12 @@ func updateId(command *Command) ([]byte, error) {
 	locks.GlobalWriteLock.Lock()
 	defer locks.GlobalWriteLock.Unlock()
 
-	result, err := memory.CollectionScanCurrentDataFileForId(idInt)
+	var result *memory.Document
+	if useIndicesForQuery == false {
+		result, err = memory.CollectionScanCurrentDataFileForId(idInt)
+	} else {
+		result, err = memory.IndexScanCurrentDataFileForId(idInt)
+	}
 	if err != nil {
 		return nil, err
 	}
