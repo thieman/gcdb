@@ -15,21 +15,31 @@ import (
 const (
 	commandHi       = "hi"
 	commandInsert   = "insert"
-	commandFlush    = "flush"
 	commandFindId   = "findid"
 	commandDeleteId = "deleteid"
 	commandUpdateId = "updateid"
 	commandIndex    = "index"
+	commandFlush    = "flush"
+	commandHelp     = "help"
 
 	responseHi   = "hello frand"
 	unrecognized = "Unrecognized command."
 )
 
 var useIndicesForQuery = false
+var responseHelp string
 
 type Command struct {
 	Command string
 	Body    *string
+}
+
+func init() {
+	responseHelp = "Command List\n"
+	for _, s := range []string{commandHi, commandInsert, commandFindId, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
+		responseHelp += s
+		responseHelp += "\n"
+	}
 }
 
 func NewCommandFromInput(buf []byte) *Command {
@@ -47,6 +57,8 @@ func NewCommandFromInput(buf []byte) *Command {
 
 func HandleCommand(command *Command) ([]byte, error) {
 	switch command.Command {
+	case commandHelp:
+		return []byte(responseHelp), nil
 	case commandHi:
 		return []byte(responseHi), nil
 	case commandInsert:
@@ -85,7 +97,8 @@ func insert(command *Command) ([]byte, error) {
 	if idFloat, ok = id.(float64); !ok {
 		return nil, errors.New("Document must contain an integer _id field")
 	}
-	unmarshaled["_id"] = int(idFloat)
+	idInt := int(idFloat)
+	unmarshaled["_id"] = idInt
 
 	data, err := json.Marshal(unmarshaled)
 	if err != nil {
@@ -95,7 +108,7 @@ func insert(command *Command) ([]byte, error) {
 	// TODO: Use channels for concurrency control instead of mutex
 	locks.GlobalWriteLock.Lock()
 	defer locks.GlobalWriteLock.Unlock()
-	memory.WriteDocumentToCurrentFile(data)
+	memory.WriteDocumentToCurrentFile(idInt, data)
 	return []byte("OK"), nil
 }
 
@@ -155,7 +168,7 @@ func deleteId(command *Command) ([]byte, error) {
 		return nil, errors.New(fmt.Sprintf("Id %d not found", idInt))
 	}
 
-	err = memory.DeleteFromCurrentDataFileAtOffset(result.Offset)
+	err = memory.DeleteDocumentFromCurrentDataFileAtOffset(idInt, result.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -215,12 +228,12 @@ func updateId(command *Command) ([]byte, error) {
 		return nil, errors.New(fmt.Sprintf("Id %d not found", idInt))
 	}
 
-	err = memory.DeleteFromCurrentDataFileAtOffset(result.Offset)
+	err = memory.DeleteDocumentFromCurrentDataFileAtOffset(idInt, result.Offset)
 	if err != nil {
 		return nil, err
 	}
 
-	memory.WriteDocumentToCurrentFile(data)
+	memory.WriteDocumentToCurrentFile(idInt, data)
 	return []byte("OK"), nil
 }
 

@@ -67,6 +67,11 @@ func UpdateIndex(id int, offset uint32) {
 	UpdateIndexFromSparseDocument(&doc)
 }
 
+func DeleteFromIndex(id int) {
+	doc := IndexSparseDocument{Id: id, Offset: 0}
+	idIndex.Delete(doc)
+}
+
 func UpdateIndexFromSparseDocument(doc *IndexSparseDocument) {
 	idIndex.ReplaceOrInsert(*doc)
 }
@@ -103,24 +108,25 @@ func SetCurrentDataFile(mdf *MappedDataFile) {
 	currentDataFile = mdf
 }
 
-func WriteDocumentToCurrentFile(data []byte) {
-	// Data format is four bytes for uint32 describing
-	// size of following payload.
+func WriteDocumentToCurrentFile(id int, data []byte) {
 	headerBytes := make([]byte, 1+8+4)
 	binary.BigEndian.PutUint32(headerBytes[1+8:], uint32(len(data)))
+	offset := currentDataFile.offset
 	currentDataFile.WriteBytes(headerBytes)
 	currentDataFile.WriteBytes(data)
+	UpdateIndex(id, offset)
 }
 
 // Delete the document at the given offset
 // Right now this is being chained together by a scan at the caller level
 // Seems kinda dirty /shrug
-func DeleteFromCurrentDataFileAtOffset(offset uint32) error {
+func DeleteDocumentFromCurrentDataFileAtOffset(id int, offset uint32) error {
 	versionBytes := make([]byte, 8)
 	currentDataFile.WriteBytesAtOffset([]byte{1}, offset)
 	binary.BigEndian.PutUint64(versionBytes, currentDataFile.version)
 	currentDataFile.WriteBytesAtOffset(versionBytes, offset+1)
 	currentDataFile.IncrementVersion()
+	DeleteFromIndex(id)
 	return nil
 }
 
@@ -252,7 +258,7 @@ func (mdf *MappedDataFile) ReadDocumentAtOffset(offset uint32) (document *Docume
 }
 
 func (mdf *MappedDataFile) CollectionScan(outputChannel chan *Document, stopChannel chan bool) {
-	// This is basically taking a snapshot at the time the scan starts
+	// This is taking a snapshot at the time the scan starts
 	// We will not scan any documents inserted after we record this
 	// Additionally, any documents deleted before the current DB version
 	// will not be returned
