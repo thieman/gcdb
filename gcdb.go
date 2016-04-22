@@ -1,30 +1,22 @@
 package main
 
 import (
-	"bytes"
+	"fmt"
 	"io"
 	"log"
 	"net"
-	"strings"
 
 	"github.com/edsrzf/mmap-go"
+	"github.com/gamechanger/gcdb/api"
 	"github.com/gamechanger/gcdb/filesystem"
 	"github.com/gamechanger/gcdb/memory"
 )
 
 const (
-	prompt       = "gcdb> "
-	commandHi    = "hi"
-	responseHi   = "hello frand"
-	unrecognized = "Unrecognized command."
+	prompt = "gcdb> "
 )
 
-type Command struct {
-	Command string
-	Body    *string
-}
-
-func main() {
+func initDataFiles() {
 	file, err := filesystem.EnsureCurrentDataFile()
 	if err != nil {
 		panic(err)
@@ -35,7 +27,13 @@ func main() {
 		panic(err)
 	}
 
-	_ = memory.NewMappedDataFile(&mappedFile)
+	mdf := memory.NewMappedDataFile(&mappedFile)
+	memory.SetCurrentDataFile(mdf)
+	log.Println(mdf)
+}
+
+func main() {
+	initDataFiles()
 
 	l, err := net.Listen("tcp", "localhost:19999")
 	if err != nil {
@@ -55,6 +53,12 @@ func main() {
 }
 
 func handleRequest(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered in handleRequest ", r)
+		}
+	}()
+
 	for {
 		buf := make([]byte, 1024)
 		conn.Write([]byte(prompt))
@@ -67,30 +71,14 @@ func handleRequest(conn net.Conn) {
 			}
 			panic(err)
 		}
-		response := handleCommand(buf)
-		conn.Write(response)
+		command := api.NewCommandFromInput(buf)
+		response, err := api.HandleCommand(command)
+		if err != nil {
+			conn.Write([]byte(err.Error()))
+		} else {
+			conn.Write(response)
+		}
 		conn.Write([]byte{10})
 	}
 	conn.Close()
-}
-
-func handleCommand(buf []byte) []byte {
-	command := NewCommand(buf)
-	if command.Command == commandHi {
-		return []byte(responseHi)
-	}
-	return []byte(unrecognized)
-}
-
-func NewCommand(buf []byte) *Command {
-	s := string(bytes.Trim(buf, string([]byte{0, 10})))
-	pieces := strings.Split(s, " ")
-	var c *Command
-	if len(pieces) < 2 {
-		c = &Command{Command: pieces[0], Body: nil}
-	} else {
-		joined := strings.Join(pieces[1:], " ")
-		c = &Command{Command: pieces[0], Body: &joined}
-	}
-	return c
 }
