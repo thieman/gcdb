@@ -4,7 +4,8 @@ import "sync"
 
 var GlobalMetadataLock = &sync.Mutex{}
 var GlobalWriteLock = &sync.Mutex{}
-var allLocks = []*sync.Mutex{GlobalMetadataLock, GlobalWriteLock}
+var GlobalCursorLock = &sync.Mutex{}
+var allLocks = []*sync.Mutex{GlobalMetadataLock, GlobalWriteLock, GlobalCursorLock}
 
 func StopTheWorld() {
 	for _, lock := range allLocks {

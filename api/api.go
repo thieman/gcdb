@@ -16,7 +16,8 @@ const (
 	commandHi       = "hi"
 	commandInsert   = "insert"
 	commandFindId   = "findid"
-	commandFind     = "find"
+	commandFindAll  = "findall"
+	commandGetMore  = "getmore"
 	commandDeleteId = "deleteid"
 	commandUpdateId = "updateid"
 	commandIndex    = "index"
@@ -29,6 +30,8 @@ const (
 
 var useIndicesForQuery = false
 var responseHelp string
+var nextCursorId int
+var activeCursorOffsets map[int]uint32
 
 type Command struct {
 	Command string
@@ -37,10 +40,24 @@ type Command struct {
 
 func init() {
 	responseHelp = "Command List\n"
-	for _, s := range []string{commandHi, commandInsert, commandFindId, commandFind, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
+	for _, s := range []string{commandHi, commandInsert, commandFindId, commandFindAll, commandGetMore, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
 		responseHelp += s
 		responseHelp += "\n"
 	}
+	activeCursorOffsets = make(map[int]uint32)
+	nextCursorId = 1
+}
+
+// Initialize and return the ID of a new cursor
+func NewCursor() int {
+	newId := nextCursorId
+	activeCursorOffsets[newId] = memory.DataStartOffset
+	nextCursorId++
+	return newId
+}
+
+func updateCursor(cursorId int, newOffset uint32) {
+	activeCursorOffsets[cursorId] = newOffset
 }
 
 func NewCommandFromInput(buf []byte) *Command {
@@ -68,8 +85,10 @@ func HandleCommand(command *Command) ([]byte, error) {
 		return flush(command)
 	case commandFindId:
 		return findId(command)
-	case commandFind:
-		return find(command)
+	case commandFindAll:
+		return findAll(command)
+	case commandGetMore:
+		return getMore(command)
 	case commandDeleteId:
 		return deleteId(command)
 	case commandUpdateId:
@@ -129,7 +148,7 @@ func flush(command *Command) ([]byte, error) {
 
 func findId(command *Command) ([]byte, error) {
 	if command.Body == nil {
-		return nil, errors.New("findid takes an integer ID as its command body")
+		return nil, errors.New("findid takes a document's integer ID as its command body")
 	}
 
 	idInt, err := strconv.Atoi(*command.Body)
@@ -153,13 +172,52 @@ func findId(command *Command) ([]byte, error) {
 	return *result.Document, nil
 }
 
-func find(command *Command) ([]byte, error) {
-	return nil, nil
+func findAll(command *Command) ([]byte, error) {
+	// TODO: Put the version control stuff in cursors too
+	locks.GlobalCursorLock.Lock()
+	defer locks.GlobalCursorLock.Unlock()
+	cursorId := NewCursor()
+	return []byte(strconv.Itoa(cursorId)), nil
+}
+
+func getMore(command *Command) ([]byte, error) {
+	if command.Body == nil {
+		return nil, errors.New("findid takes a cursor's integer ID as its command body")
+	}
+
+	idInt, err := strconv.Atoi(*command.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	locks.GlobalCursorLock.Lock()
+	defer locks.GlobalCursorLock.Unlock()
+
+	offset, ok := activeCursorOffsets[idInt]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("Could not find cursor with Id %d", idInt))
+	}
+	result, err := memory.CollectionScanCurrentDataFileFromOffset(offset, 20)
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errors.New("cursor exhausted")
+	}
+
+	var idx int
+	output := make([]byte, 0)
+	for idx = range result {
+		output = append(output, *result[idx].Document...)
+		output = append(output, byte(10))
+	}
+	updateCursor(idInt, (*result[idx]).NextOffset)
+	return output, nil
 }
 
 func deleteId(command *Command) ([]byte, error) {
 	if command.Body == nil {
-		return nil, errors.New("deleteid takes an integer ID as its command body")
+		return nil, errors.New("deleteid takes a document's integer ID as its command body")
 	}
 
 	idInt, err := strconv.Atoi(*command.Body)

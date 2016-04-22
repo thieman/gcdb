@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	dataStartOffset = uint32(1 + 4 + 8)
+	DataStartOffset = uint32(1 + 4 + 8)
 )
 
 type MappedDataFile struct {
@@ -32,10 +32,11 @@ type IndexSparseDocument struct {
 }
 
 type Document struct {
-	Document *[]byte
-	Offset   uint32 // offset of the entire document, not the data segment
-	deleted  bool
-	version  uint64
+	Document   *[]byte
+	Offset     uint32 // offset of the entire document, not the data segment
+	NextOffset uint32
+	deleted    bool
+	version    uint64
 }
 
 // It's weird that this is in this file, but
@@ -138,7 +139,7 @@ func ScanForIndexBuild(resultChannel chan *IndexSparseDocument) {
 	incomingChannel := make(chan *Document, 50)
 	stopChannel := make(chan bool, 1)
 	defer close(resultChannel)
-	go currentDataFile.CollectionScan(incomingChannel, stopChannel)
+	go currentDataFile.CollectionScan(DataStartOffset, incomingChannel, stopChannel)
 
 	idUnmarshalStruct := IdUnmarshaller{}
 	for doc := range incomingChannel {
@@ -171,7 +172,7 @@ func CollectionScanCurrentDataFileForId(id int) (*Document, error) {
 		stopChannel <- true
 	}()
 
-	go currentDataFile.CollectionScan(resultChannel, stopChannel)
+	go currentDataFile.CollectionScan(DataStartOffset, resultChannel, stopChannel)
 	idUnmarshalStruct := IdUnmarshaller{} // faster, deserialize less, reuse struct
 	for doc := range resultChannel {
 		err := json.Unmarshal(*doc.Document, &idUnmarshalStruct)
@@ -183,6 +184,24 @@ func CollectionScanCurrentDataFileForId(id int) (*Document, error) {
 		}
 	}
 	return nil, nil
+}
+
+func CollectionScanCurrentDataFileFromOffset(offset uint32, docsToReturn int) ([]*Document, error) {
+	resultChannel := make(chan *Document, 50)
+	stopChannel := make(chan bool, 1)
+	defer func() {
+		stopChannel <- true
+	}()
+
+	go currentDataFile.CollectionScan(offset, resultChannel, stopChannel)
+	docs := make([]*Document, 0, docsToReturn)
+	for doc := range resultChannel {
+		docs = append(docs, doc)
+		if len(docs) == docsToReturn {
+			break
+		}
+	}
+	return docs, nil
 }
 
 func FlushCurrentFile() error {
@@ -199,7 +218,7 @@ func (mdf *MappedDataFile) Initialize() {
 		mdf.version = binary.BigEndian.Uint64(*versionBytes)
 		return
 	}
-	mdf.offset = dataStartOffset
+	mdf.offset = DataStartOffset
 	mdf.version = uint64(1)
 	mdf.WriteOffsetHeader()
 	mdf.WriteVersionHeader()
@@ -251,22 +270,24 @@ func (mdf *MappedDataFile) WriteBytes(data []byte) {
 
 func (mdf *MappedDataFile) ReadDocumentAtOffset(offset uint32) (document *Document, nextOffset uint32) {
 	headerBytes := mdf.ReadBytesAtOffset(1+8+4, offset)
-	docVersion := binary.BigEndian.Uint64((*headerBytes)[1:9])
+	docVersion := binary.BigEndian.Uint64((*headerBytes)[1 : 1+8])
 	docLength := binary.BigEndian.Uint32((*headerBytes)[1+8:])
+	nextOffset = offset + 1 + 8 + 4 + docLength
 	doc := Document{
-		Document: mdf.ReadBytesAtOffset(docLength, offset+1+8+4),
-		Offset:   offset,
-		deleted:  (*headerBytes)[0] == 1,
-		version:  docVersion}
-	return &doc, offset + 1 + 8 + 4 + docLength
+		Document:   mdf.ReadBytesAtOffset(docLength, offset+1+8+4),
+		Offset:     offset,
+		NextOffset: nextOffset,
+		deleted:    (*headerBytes)[0] == 1,
+		version:    docVersion}
+	return &doc, nextOffset
 }
 
-func (mdf *MappedDataFile) CollectionScan(outputChannel chan *Document, stopChannel chan bool) {
+func (mdf *MappedDataFile) CollectionScan(fromOffset uint32, outputChannel chan *Document, stopChannel chan bool) {
 	// This is taking a snapshot at the time the scan starts
 	// We will not scan any documents inserted after we record this
 	// Additionally, any documents deleted before the current DB version
 	// will not be returned
-	currentOffset := dataStartOffset
+	currentOffset := fromOffset
 	currentVersion := currentDataFile.version
 	stopOffset := mdf.offset
 	for currentOffset < stopOffset {
