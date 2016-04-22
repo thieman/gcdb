@@ -3,10 +3,12 @@ package memory
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"github.com/edsrzf/mmap-go"
 	"github.com/gamechanger/gcdb/locks"
+	"github.com/google/btree"
 )
 
 const (
@@ -24,6 +26,11 @@ type IdUnmarshaller struct {
 	Id int `json:"_id"`
 }
 
+type IndexSparseDocument struct {
+	Offset uint32
+	Id     int
+}
+
 type Document struct {
 	Document *[]byte
 	Offset   uint32 // offset of the entire document, not the data segment
@@ -31,7 +38,46 @@ type Document struct {
 	version  uint64
 }
 
+// It's weird that this is in this file, but
+// didn't want to deal with circular imports now
+func (isd IndexSparseDocument) Less(than btree.Item) bool {
+	return isd.Id < than.(IndexSparseDocument).Id
+}
+
 var currentDataFile *MappedDataFile
+var idIndex *btree.BTree
+
+func InitializeIndices() {
+	log.Println("Building B-tree index on ID")
+
+	idIndex = btree.New(2)
+	resultChannel := make(chan *IndexSparseDocument, 100)
+	go ScanForIndexBuild(resultChannel)
+	numDocs := 0
+	for doc := range resultChannel {
+		UpdateIndexFromSparseDocument(doc)
+		numDocs++
+	}
+
+	log.Println(fmt.Sprintf("Index build successful, read %d documents", numDocs))
+}
+
+func UpdateIndex(id int, offset uint32) {
+	doc := IndexSparseDocument{Id: id, Offset: offset}
+	UpdateIndexFromSparseDocument(&doc)
+}
+
+func UpdateIndexFromSparseDocument(doc *IndexSparseDocument) {
+	idIndex.ReplaceOrInsert(*doc)
+}
+
+func LookupOffsetForIdInIndex(id int) uint32 {
+	item := idIndex.Get(IndexSparseDocument{Id: id, Offset: 0})
+	if item == nil {
+		return 0
+	}
+	return item.(IndexSparseDocument).Offset
+}
 
 // Here's the jank-ass format for the data files
 // First byte: 0 if file has been initialized, 1 otherwise
@@ -76,6 +122,32 @@ func DeleteFromCurrentDataFileAtOffset(offset uint32) error {
 	currentDataFile.WriteBytesAtOffset(versionBytes, offset+1)
 	currentDataFile.IncrementVersion()
 	return nil
+}
+
+func ScanForIndexBuild(resultChannel chan *IndexSparseDocument) {
+	incomingChannel := make(chan *Document, 50)
+	stopChannel := make(chan bool, 1)
+	defer close(resultChannel)
+	go currentDataFile.CollectionScan(incomingChannel, stopChannel)
+
+	idUnmarshalStruct := IdUnmarshaller{}
+	for doc := range incomingChannel {
+		err := json.Unmarshal(*doc.Document, &idUnmarshalStruct)
+		if err != nil {
+			panic(err)
+		}
+		resultChannel <- &IndexSparseDocument{Offset: doc.Offset, Id: idUnmarshalStruct.Id}
+	}
+
+}
+
+func IndexScanCurrentDataFileForId(id int) (*Document, error) {
+	offset := LookupOffsetForIdInIndex(id)
+	if offset == uint32(0) {
+		return nil, nil
+	}
+	doc, _ := currentDataFile.ReadDocumentAtOffset(offset)
+	return doc, nil
 }
 
 func CollectionScanCurrentDataFileForId(id int) (*Document, error) {

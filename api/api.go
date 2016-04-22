@@ -19,10 +19,13 @@ const (
 	commandFindId   = "findid"
 	commandDeleteId = "deleteid"
 	commandUpdateId = "updateid"
+	commandIndex    = "index"
 
 	responseHi   = "hello frand"
 	unrecognized = "Unrecognized command."
 )
+
+var useIndicesForQuery = false
 
 type Command struct {
 	Command string
@@ -56,6 +59,8 @@ func HandleCommand(command *Command) ([]byte, error) {
 		return deleteId(command)
 	case commandUpdateId:
 		return updateId(command)
+	case commandIndex:
+		return toggleIndices(command)
 	default:
 		return nil, errors.New(unrecognized)
 	}
@@ -111,10 +116,17 @@ func findId(command *Command) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := memory.CollectionScanCurrentDataFileForId(idInt)
+
+	var result *memory.Document
+	if useIndicesForQuery == false {
+		result, err = memory.CollectionScanCurrentDataFileForId(idInt)
+	} else {
+		result, err = memory.IndexScanCurrentDataFileForId(idInt)
+	}
 	if err != nil {
 		return nil, err
 	}
+
 	if result == nil {
 		return nil, errors.New(fmt.Sprintf("Id %d not found", idInt))
 	}
@@ -210,4 +222,19 @@ func updateId(command *Command) ([]byte, error) {
 
 	memory.WriteDocumentToCurrentFile(data)
 	return []byte("OK"), nil
+}
+
+func toggleIndices(command *Command) ([]byte, error) {
+	if command.Body == nil {
+		return nil, errors.New("index takes either 'on' or 'off' as its body")
+	}
+
+	if *command.Body == "on" {
+		useIndicesForQuery = true
+		return []byte("INDICES ON"), nil
+	} else if *command.Body == "off" {
+		useIndicesForQuery = false
+		return []byte("INDICES OFF"), nil
+	}
+	return nil, errors.New("index takes either 'on' or 'off' as its body")
 }

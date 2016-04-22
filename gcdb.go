@@ -34,6 +34,7 @@ func initDataFiles() {
 
 func main() {
 	initDataFiles()
+	memory.InitializeIndices()
 
 	l, err := net.Listen("tcp", "localhost:19999")
 	if err != nil {
