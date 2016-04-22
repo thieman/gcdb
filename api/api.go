@@ -22,6 +22,7 @@ const (
 	commandUpdateId = "updateid"
 	commandIndex    = "index"
 	commandFlush    = "flush"
+	commandStats    = "stats"
 	commandHelp     = "help"
 
 	responseHi   = "hello frand"
@@ -40,7 +41,7 @@ type Command struct {
 
 func init() {
 	responseHelp = "Command List\n"
-	for _, s := range []string{commandHi, commandInsert, commandFindId, commandFindAll, commandGetMore, commandDeleteId, commandUpdateId, commandIndex, commandFlush} {
+	for _, s := range []string{commandHi, commandInsert, commandFindId, commandFindAll, commandGetMore, commandDeleteId, commandUpdateId, commandIndex, commandFlush, commandStats} {
 		responseHelp += s
 		responseHelp += "\n"
 	}
@@ -83,6 +84,8 @@ func HandleCommand(command *Command) ([]byte, error) {
 		return insert(command)
 	case commandFlush:
 		return flush(command)
+	case commandStats:
+		return stats(command)
 	case commandFindId:
 		return findId(command)
 	case commandFindAll:
@@ -330,4 +333,8 @@ func toggleIndices(command *Command) ([]byte, error) {
 		return []byte("INDICES OFF"), nil
 	}
 	return nil, errors.New("index takes either 'on' or 'off' as its body")
+}
+
+func stats(command *Command) ([]byte, error) {
+	return memory.Stats(), nil
 }

@@ -89,6 +89,10 @@ func IdExistsInIndex(id int) bool {
 	return idIndex.Get(IndexSparseDocument{Id: id, Offset: 0}) != nil
 }
 
+func Stats() []byte {
+	return []byte(fmt.Sprintf("Documents: %d", idIndex.Len()))
+}
+
 // Here's the jank-ass format for the data files
 // First byte: 0 if file has been initialized, 1 otherwise
 // Next eight bytes: uint64 storing current op version
